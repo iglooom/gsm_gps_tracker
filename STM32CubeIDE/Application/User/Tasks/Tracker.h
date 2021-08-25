@@ -22,6 +22,7 @@ uint8_t at_check(MsgType* msg);
 uint8_t gps_powerup(MsgType* msg);
 uint8_t gps_reset(MsgType* msg);
 uint8_t gps_get_status(MsgType* msg);
+uint8_t gps_speed(char* rmc);
 uint8_t gprs_is_attached(MsgType* msg);
 uint8_t gprs_prepare(MsgType* msg);
 uint8_t gsm_get_csq(MsgType* msg, char *csq);

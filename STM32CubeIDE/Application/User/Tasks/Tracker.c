@@ -22,10 +22,12 @@ struct flags {
 	uint8_t gsm_registered:1;
 	uint8_t gprs_available:1;
 	uint8_t gprs_active:1;
+	uint8_t ext_ign:1;
 	char csq[5];
 	char imei[20];
 	char op_name[30];
 	uint8_t try_cnt;
+	uint8_t gps_speed;
 };
 
 struct gps_data {
@@ -39,6 +41,8 @@ struct gps_data gp;
 struct flags f = {};
 char tmp_buf[512] = {};
 char url_buf[512] = {};
+uint32_t send_sycle = 60000;
+uint8_t stand_cntr = 0;
 
 SemaphoreHandle_t opMutex;
 
@@ -142,8 +146,6 @@ void TrackerMainTask(void *argument)
 		f.try_cnt = 0;
 		while(1)
 		{
-			osDelay(30000);
-
 			if(f.gps_status > 1 && gp.valid){
 				xSemaphoreTake(opMutex, portMAX_DELAY);
 				sprintf(url_buf,
@@ -162,11 +164,25 @@ void TrackerMainTask(void *argument)
 						}
 					}
 				}
+
 				xSemaphoreGive(opMutex);
+
 				if(++f.try_cnt > 10){
 					goto restart;
 				}
 			}
+
+			if(f.gps_speed > 20){
+				send_sycle = 10000;
+			}else if(f.gps_speed > 10){
+				send_sycle = 15000;
+			}else if(f.gps_speed > 0 || f.ext_ign){
+				send_sycle = 30000;
+			}else{
+				send_sycle = 300000; // 5 min
+				stand_cntr++;
+			}
+			osDelay(send_sycle);
 		}
 
 restart:
@@ -228,7 +244,7 @@ void TrackerStatusTask() // Handle unsolicited reports
 }
 
 
-void PeriodicCheckTask() // Check modem health
+void PeriodicCheckTask() // Check modem health and update GPS data
 {
 	static MsgType msg = {};
 
@@ -244,6 +260,12 @@ void PeriodicCheckTask() // Check modem health
 		}
 		if(f.gps_status > 1){
 			gp.valid = (gps_get_rmc(&msg, gp.rmc) && gps_get_gga(&msg, gp.gga));
+			if(gp.valid){
+				f.gps_speed = gps_speed(gp.rmc);
+				if(f.gps_speed){
+					stand_cntr = 0;
+				}
+			}
 		}
 
 		if(f.gsm_registered){
@@ -268,7 +290,9 @@ void PeriodicCheckTask() // Check modem health
 		}
 		xSemaphoreGive(opMutex);
 
-		HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+		if(stand_cntr < 6){
+			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+		}
 	}
 }
 
@@ -313,6 +337,37 @@ uint8_t gps_get_status(MsgType* msg)
 		}else if(strcmp(msg->data, "+CGPSSTATUS: Location 3D Fix") == 0){
 			return 4;
 		}
+	}
+	return 0;
+}
+
+uint8_t gps_speed(char* rmc)
+{
+	char* search_w_ptr = strstr(rmc, ",W,");
+	char* search_e_ptr = strstr(rmc, ",E,");
+	char* speed_ptr;
+	if(search_w_ptr == NULL && search_e_ptr == NULL){
+		return 0;
+	}else if(search_w_ptr == NULL && search_e_ptr != NULL){
+		speed_ptr = search_e_ptr;
+	}else if(search_w_ptr != NULL && search_e_ptr == NULL){
+		speed_ptr = search_w_ptr;
+	}else if(search_w_ptr > search_e_ptr){
+		speed_ptr = search_e_ptr;
+	}else{
+		speed_ptr = search_w_ptr;
+	}
+	speed_ptr += 3;
+	char* end_ptr = strstr(speed_ptr, ".");
+	if(end_ptr == NULL){
+		return 0;
+	}
+	char speed[4] = {};
+	memcpy(speed,speed_ptr,end_ptr-speed_ptr);
+
+	unsigned int s = 0;
+	if(sscanf(speed_ptr,"%u",&s)){
+		return (uint8_t)(s & 0xFF);
 	}
 	return 0;
 }
