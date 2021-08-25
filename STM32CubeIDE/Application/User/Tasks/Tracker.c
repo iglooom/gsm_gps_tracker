@@ -36,8 +36,7 @@ struct gps_data {
 
 struct gps_data gp;
 
-volatile struct flags f = {};
-MsgType msg = {};
+struct flags f = {};
 char tmp_buf[512] = {};
 char url_buf[512] = {};
 
@@ -63,12 +62,12 @@ void TrackerMainTask(void *argument)
 	static HttpResType http;
 	static MsgType msg = {};
 
+	osDelay(1000);
+	power_off();
+	osDelay(10000);
+
 	while(1)
 	{
-		osDelay(1000);
-		power_off();
-
-		osDelay(10000);
 		power_on();
 
 		/* Wait modem init */
@@ -93,7 +92,7 @@ void TrackerMainTask(void *argument)
 		/* Power up GPS core */
 		osDelay(300);
 		f.try_cnt = 0;
-		while(!gps_powerup()){
+		while(!gps_powerup(&msg)){
 			if(retry(5)){
 				goto restart;
 			}
@@ -102,7 +101,7 @@ void TrackerMainTask(void *argument)
 		/* Perform GPS cold start */
 		osDelay(300);
 		f.try_cnt = 0;
-		while(!gps_reset()){
+		while(!gps_reset(&msg)){
 			if(retry(5)){
 				goto restart;
 			}
@@ -122,20 +121,17 @@ void TrackerMainTask(void *argument)
 		}
 		f.gsm_registered = 1;
 
-		xSemaphoreGive(opMutex);
-
 		/* Wait GPRS available */
-		while(f.gprs_available == 0){
-			if(retry(60)){
+		while(!gprs_is_attached(&msg)){
+			if(retry(100)){
 				goto restart;
 			}
 		}
 
-		xSemaphoreTake(opMutex, portMAX_DELAY);
 		/* Open GPRS connection */
 		osDelay(1000);
 		f.try_cnt = 0;
-		while(!gprs_prepare()){
+		while(!gprs_prepare(&msg)){
 			if(retry(30)){
 				goto restart;
 			}
@@ -147,7 +143,6 @@ void TrackerMainTask(void *argument)
 		while(1)
 		{
 			osDelay(30000);
-			printf("%s CSQ: %s\r\n", f.op_name, f.csq);
 
 			if(f.gps_status > 1 && gp.valid){
 				xSemaphoreTake(opMutex, portMAX_DELAY);
@@ -160,7 +155,7 @@ void TrackerMainTask(void *argument)
 					gp.gga
 				);
 
-				if(http_get(url_buf)){
+				if(http_get(&msg, url_buf)){
 					if(get_http_result(&http, 10000)){
 						if(strcmp(http.code, "200") == 0){
 							f.try_cnt = 0;
@@ -217,7 +212,10 @@ void TrackerStatusTask() // Handle unsolicited reports
 			}else if(strcmp(un_msg.data, "NORMAL POWER DOWN") == 0){
 				f.sim_ready = 0;
 				f.gps_ready = 0;
+				f.gps_runing = 0;
 				f.gsm_ready = 0;
+				f.gprs_available = 0;
+				f.gprs_active = 0;
 				f.pwr_on = 0;
 				f.cfun = 0;
 				f.creg = 0;
@@ -245,7 +243,7 @@ void PeriodicCheckTask() // Check modem health
 			f.gps_status = gps_get_status(&msg);
 		}
 		if(f.gps_status > 1){
-			gp.valid = (gps_get_rmc(gp.rmc) && gps_get_gga(gp.gga));
+			gp.valid = (gps_get_rmc(&msg, gp.rmc) && gps_get_gga(&msg, gp.gga));
 		}
 
 		if(f.gsm_registered){
@@ -257,11 +255,15 @@ void PeriodicCheckTask() // Check modem health
 			gsm_get_opname(&msg, f.op_name);
 
 			osDelay(200);
-			f.gprs_available = gsm_get_gprs_status(&msg);
+			f.gprs_available = gprs_is_attached(&msg);
 
 			if(f.gprs_available){
 				osDelay(200);
 				f.gprs_active = gprs_get_status(&msg);
+				if(!f.gprs_active){
+					osDelay(200);
+					gprs_prepare(&msg);
+				}
 			}
 		}
 		xSemaphoreGive(opMutex);
@@ -275,26 +277,26 @@ uint8_t IS_OK(MsgType* msg)
 	return (strcmp(msg->data, "OK") == 0);
 }
 
-uint8_t at_check()
+uint8_t at_check(MsgType* msg)
 {
-	if(AT("", &msg, 1, 500)){
-		return IS_OK(&msg);
+	if(AT("", msg, 1, 500)){
+		return IS_OK(msg);
 	}
 	return 0;
 }
 
-uint8_t gps_powerup()
+uint8_t gps_powerup(MsgType* msg)
 {
-	if(AT("+CGPSPWR=1", &msg, 1, 500)){
-		return IS_OK(&msg);
+	if(AT("+CGPSPWR=1", msg, 1, 500)){
+		return IS_OK(msg);
 	}
 	return 0;
 }
 
-uint8_t gps_reset()
+uint8_t gps_reset(MsgType* msg)
 {
-	if(AT("+CGPSRST=0", &msg, 1, 500)){
-		return IS_OK(&msg);
+	if(AT("+CGPSRST=0", msg, 1, 500)){
+		return IS_OK(msg);
 	}
 	return 0;
 }
@@ -315,27 +317,42 @@ uint8_t gps_get_status(MsgType* msg)
 	return 0;
 }
 
-uint8_t gprs_prepare()
+uint8_t gprs_is_attached(MsgType* msg)
 {
 	osDelay(100);
-	if(!AT("+SAPBR=2,3", &msg, 1, 500)){ // Query bearer
+	if(!AT("+CGATT?", msg, 1, 500)){
 		return 0;
 	}
-	if(strstr(msg.data, "+SAPBR: 3,1,") == NULL){ // Bearer not open
-		if(strstr(msg.data, "+SAPBR: 3,3,") != NULL){ // Bearer closed
+	if(strcmp(msg->data, "+CGATT: 0") == 0){ // Not attached
+		osDelay(100);
+		AT("+CGATT=1", msg, 1, 2500); // Try to attach
+
+		return 0;
+	}
+	return 1;
+}
+
+uint8_t gprs_prepare(MsgType* msg)
+{
+	osDelay(100);
+	if(!AT("+SAPBR=2,3", msg, 1, 500)){ // Query bearer
+		return 0;
+	}
+	if(strstr(msg->data, "+SAPBR: 3,1,") == NULL){ // Bearer not open
+		if(strstr(msg->data, "+SAPBR: 3,3,") != NULL){ // Bearer closed
 			osDelay(100);
-			AT("+SAPBR=1,3", &msg, 1, 500); // Open bearer
+			AT("+SAPBR=1,3", msg, 1, 500); // Open bearer
 		}
 		return 0;
 	}
 
 	osDelay(300);
-	if(!AT("+HTTPINIT", &msg, 1, 500)){
+	if(!AT("+HTTPINIT", msg, 1, 500)){
 		return 0;
 	}
 
 	osDelay(300);
-	if(!AT("+HTTPPARA=\"CID\",3", &msg, 1, 500)){
+	if(!AT("+HTTPPARA=\"CID\",3", msg, 1, 500)){
 		return 0;
 	}
 
@@ -419,40 +436,40 @@ uint8_t gprs_get_status(MsgType* msg)
 	return 0;
 }
 
-uint8_t gps_get_rmc(char* rmc)
+uint8_t gps_get_rmc(MsgType* msg, char* rmc)
 {
-	if(!AT("+CGPSINF=32", &msg, 1, 500)){
+	if(!AT("+CGPSINF=32", msg, 1, 500)){
 		return 0;
 	}
 
-	if(strstr(msg.data, "32,") != NULL){
-		strcpy(rmc, &msg.data[3]);
+	if(strstr(msg->data, "32,") != NULL){
+		strcpy(rmc, &msg->data[3]);
 		return 1;
 	}
 	return 0;
 }
 
-uint8_t gps_get_gga(char* gga)
+uint8_t gps_get_gga(MsgType* msg, char* gga)
 {
-	if(!AT("+CGPSINF=2", &msg, 1, 500)){
+	if(!AT("+CGPSINF=2", msg, 1, 500)){
 		return 0;
 	}
 
-	if(strstr(msg.data, "2,") != NULL){
-		strcpy(gga, &msg.data[2]);
+	if(strstr(msg->data, "2,") != NULL){
+		strcpy(gga, &msg->data[2]);
 		return 1;
 	}
 	return 0;
 }
 
-uint8_t http_get(char* url)
+uint8_t http_get(MsgType* msg, char* url)
 {
 	sprintf(tmp_buf, "+HTTPPARA=\"URL\",\"%s\"", url);
-	if(!AT(tmp_buf, &msg, 1, 500)){
+	if(!AT(tmp_buf, msg, 1, 500)){
 		return 0;
 	}
 
-	if(!AT("+HTTPACTION=0", &msg, 1, 500)){
+	if(!AT("+HTTPACTION=0", msg, 1, 500)){
 		return 0;
 	}
 	return 1;
@@ -460,6 +477,8 @@ uint8_t http_get(char* url)
 
 void power_on()
 {
+	printf("power_on\r\n");
+	UART_AT_start();
 	HAL_GPIO_WritePin(MODEM_PWR_GPIO_Port, MODEM_PWR_Pin, GPIO_PIN_RESET);
 	f.hw_pwr_on = 1;
 	osDelay(500);
@@ -468,9 +487,14 @@ void power_on()
 
 void power_off()
 {
+	printf("power_off\r\n");
+	UART_AT_stop();
+	HAL_GPIO_WritePin(MODEM_PWR_GPIO_Port, MODEM_PWR_Pin, GPIO_PIN_RESET);
+	osDelay(500);
 	HAL_GPIO_WritePin(MODEM_PWR_GPIO_Port, MODEM_PWR_Pin, GPIO_PIN_SET);
-	AT("+CPOWD=1", &msg, 1, 500);
-	AT("+CPOWD=1", &msg, 1, 500);
+	osDelay(5000);
+	AT("+CPOWD=1", NULL, 1, 500);
+	AT("+CPOWD=1", NULL, 1, 500);
 	memset(&f,0,sizeof(f));
 }
 

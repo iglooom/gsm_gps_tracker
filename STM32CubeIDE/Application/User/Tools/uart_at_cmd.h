@@ -29,6 +29,8 @@ typedef struct {
 } HttpResType;
 
 void UART_AT_Init();
+void UART_AT_stop();
+void UART_AT_start();
 uint8_t AT(char* cmd, MsgType* answer, uint8_t lines_in_answer, TickType_t timeout);
 uint8_t get_status_update(MsgType* msg);
 uint8_t get_http_result(HttpResType* res, BaseType_t timeout);

@@ -53,18 +53,6 @@
 
 /* USER CODE END FunctionPrototypes */
 
-/* USER CODE BEGIN PREPOSTSLEEP */
-__weak void PreSleepProcessing(uint32_t *ulExpectedIdleTime)
-{
-/* place for user code */
-}
-
-__weak void PostSleepProcessing(uint32_t *ulExpectedIdleTime)
-{
-/* place for user code */
-}
-/* USER CODE END PREPOSTSLEEP */
-
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 

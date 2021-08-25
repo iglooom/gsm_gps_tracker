@@ -25,12 +25,7 @@ void UART_AT_Init()
 	http_queue = xQueueCreate(2, sizeof(HttpResType));
 	atCmdMutex = xSemaphoreCreateMutex();
 
-	HAL_UART_Receive(&huart1, buf, 256, 1);
-
-	memset(buf,0,sizeof(buf));
 	answer_lines_cnt = 0;
-
-	HAL_UART_Receive_IT(&huart1, buf, 1);
 }
 
 uint8_t AT(char* cmd, MsgType* answer, uint8_t lines_in_answer, TickType_t timeout)
@@ -44,17 +39,28 @@ uint8_t AT(char* cmd, MsgType* answer, uint8_t lines_in_answer, TickType_t timeo
 		osDelay(100); // Just in case
 		xQueueReset(answer_queue);
 
-
-		//if(HAL_UART_GetState(&huart1) == (HAL_UART_STATE_READY || HAL_UART_STATE_BUSY_RX)){
 		answer_lines_cnt = lines_in_answer;
 		while(HAL_UART_Transmit(&huart1, (uint8_t*)cmd_buf, cmd_len, timeout) == HAL_BUSY);
-		res = (xQueueReceive(answer_queue, answer, timeout) == pdPASS);
+		if(answer != NULL){
+			res = (xQueueReceive(answer_queue, answer, timeout) == pdPASS);
+		}
 		answer_lines_cnt = 0;
-		//}
 
 		xSemaphoreGive(atCmdMutex);
 	}
 	return res;
+}
+
+void UART_AT_stop()
+{
+	HAL_UART_AbortReceive(&huart1);
+}
+
+void UART_AT_start()
+{
+	HAL_UART_AbortReceive(&huart1);
+	memset(buf,0,sizeof(buf));
+	while(HAL_UARTEx_ReceiveToIdle_DMA(&huart1, buf, 250) != HAL_OK);
 }
 
 uint8_t get_status_update(MsgType* msg)
@@ -67,7 +73,7 @@ uint8_t get_http_result(HttpResType* res, BaseType_t timeout)
 	return (xQueueReceive(http_queue, res, timeout) == pdPASS);
 }
 
-void push_message(uint8_t* start, uint8_t* end)
+void push_message(char* start, char* end)
 {
 	static MsgType msg;
 
@@ -93,37 +99,28 @@ void push_message(uint8_t* start, uint8_t* end)
 	}
 }
 
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-	static uint8_t* wr_ptr = buf;
-	static uint8_t* msg_start_ptr = buf;
-
+	static char i=0;
 	if(huart == &huart1) {
-		if(wr_ptr-buf >= 2)	{
-			uint8_t crlf_condition = (memcmp("\r\n",--wr_ptr,2) == 0);
-			wr_ptr++;
-
-			if(crlf_condition){
-				if(wr_ptr - msg_start_ptr > 2 && msg_start_ptr != buf){
-					if(answer_lines_cnt <= 1){
-						push_message(msg_start_ptr, wr_ptr-1);
-						msg_start_ptr = buf;
-						wr_ptr = buf;
-						answer_lines_cnt = 0;
-					}else{
-						answer_lines_cnt--;
-					}
-				}else{
-					msg_start_ptr = wr_ptr+1;
-				}
+		char* _ptr = (char*)buf;
+		if(Size > 2){
+			_ptr[Size] = 0;
+			if(memcmp("\r\n",_ptr,2) == 0){
+				_ptr+=2;
+			}
+			char* crlf_ptr = strstr(_ptr,"\r\n");
+			if(crlf_ptr != NULL && _ptr != crlf_ptr){
+				push_message(_ptr, crlf_ptr);
 			}
 		}
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart1, buf, 250);
+	}
+}
 
-		if((++wr_ptr) - buf >= sizeof(buf))	{
-			push_message(msg_start_ptr, wr_ptr);
-			wr_ptr = buf;
-			msg_start_ptr = buf;
-		}
-		HAL_UART_Receive_IT(&huart1, wr_ptr, 1);
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	if(huart == &huart1) {
+		HAL_UARTEx_ReceiveToIdle_DMA(&huart1, buf, 250);
 	}
 }
