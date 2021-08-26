@@ -166,23 +166,21 @@ void TrackerMainTask(void *argument)
 					}
 				}
 
-
-
 				if(++f.try_cnt > 10){
 					goto restart;
 				}
 			}
 
-			if(f.gps_speed > 20){
-				send_sycle = 10000;
-			}else if(f.gps_speed > 10){
-				send_sycle = 15000;
-			}else if(f.gps_speed > 0 || f.ext_ign){
-				send_sycle = 30000;
-			}else{
-				send_sycle = 300000; // 5 min
-				stand_cntr++;
-			}
+            if(f.gps_speed > 20){
+                send_sycle = 10000;
+            }else if(f.gps_speed > 10){
+                send_sycle = 15000;
+            }else if(f.gps_speed > 0 || f.ext_ign){
+                send_sycle = 30000;
+            }else{
+                send_sycle = 300000; // 5 min
+                stand_cntr++;
+            }
 
 			xSemaphoreGive(opMutex);
 			osDelay(send_sycle);

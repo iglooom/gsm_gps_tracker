@@ -301,6 +301,15 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void PreSleepProcessing(uint32_t *ulExpectedIdleTime)
+{
+	HAL_SuspendTick();
+}
+
+void PostSleepProcessing(uint32_t *ulExpectedIdleTime)
+{
+	HAL_ResumeTick();
+}
 
 /* USER CODE END 4 */
 
