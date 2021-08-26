@@ -146,8 +146,9 @@ void TrackerMainTask(void *argument)
 		f.try_cnt = 0;
 		while(1)
 		{
+			xSemaphoreTake(opMutex, portMAX_DELAY);
+
 			if(f.gps_status > 1 && gp.valid){
-				xSemaphoreTake(opMutex, portMAX_DELAY);
 				sprintf(url_buf,
 					"http://xtlt.ru:5159/?id=%s&operator=%s&csq=%s&gprmc=$GPRMC,%s&gpgga=$GPGGA,%s",
 					f.imei,
@@ -165,7 +166,7 @@ void TrackerMainTask(void *argument)
 					}
 				}
 
-				xSemaphoreGive(opMutex);
+
 
 				if(++f.try_cnt > 10){
 					goto restart;
@@ -182,6 +183,8 @@ void TrackerMainTask(void *argument)
 				send_sycle = 300000; // 5 min
 				stand_cntr++;
 			}
+
+			xSemaphoreGive(opMutex);
 			osDelay(send_sycle);
 		}
 
