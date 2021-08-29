@@ -60,8 +60,11 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_Pin GPIO_PIN_13
 #define LED_GPIO_Port GPIOC
-#define MODEM_PWR_Pin GPIO_PIN_4
+#define MODEM_PWR_Pin GPIO_PIN_12
 #define MODEM_PWR_GPIO_Port GPIOB
+#define IGNITION_Pin GPIO_PIN_6
+#define IGNITION_GPIO_Port GPIOB
+#define IGNITION_EXTI_IRQn EXTI9_5_IRQn
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

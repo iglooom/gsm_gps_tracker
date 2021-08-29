@@ -20,6 +20,7 @@ void power_off();
 
 uint8_t at_check(MsgType* msg);
 uint8_t gps_powerup(MsgType* msg);
+uint8_t gps_powerdn(MsgType* msg);
 uint8_t gps_reset(MsgType* msg);
 uint8_t gps_get_status(MsgType* msg);
 uint8_t gps_speed(char* rmc);

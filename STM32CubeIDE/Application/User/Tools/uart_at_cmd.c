@@ -40,7 +40,7 @@ uint8_t AT(char* cmd, MsgType* answer, uint8_t lines_in_answer, TickType_t timeo
 		xQueueReset(answer_queue);
 
 		answer_lines_cnt = lines_in_answer;
-		while(HAL_UART_Transmit(&huart1, (uint8_t*)cmd_buf, cmd_len, timeout) == HAL_BUSY);
+		HAL_UART_Transmit(&huart1, (uint8_t*)cmd_buf, cmd_len, timeout);
 		if(answer != NULL){
 			res = (xQueueReceive(answer_queue, answer, timeout) == pdPASS);
 		}
@@ -101,7 +101,6 @@ void push_message(char* start, char* end)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-	static char i=0;
 	if(huart == &huart1) {
 		char* _ptr = (char*)buf;
 		if(Size > 2){

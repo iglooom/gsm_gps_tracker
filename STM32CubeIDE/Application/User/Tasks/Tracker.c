@@ -23,6 +23,7 @@ struct flags {
 	uint8_t gprs_available:1;
 	uint8_t gprs_active:1;
 	uint8_t ext_ign:1;
+	uint8_t lowpwr:1;
 	char csq[5];
 	char imei[20];
 	char op_name[30];
@@ -36,7 +37,7 @@ struct gps_data {
 	uint8_t valid:1;
 };
 
-struct gps_data gp;
+struct gps_data gp = {};
 
 struct flags f = {};
 char tmp_buf[512] = {};
@@ -69,10 +70,13 @@ void TrackerMainTask(void *argument)
 	osDelay(1000);
 	power_off();
 	osDelay(10000);
+    power_on();
 
 	while(1)
 	{
-		power_on();
+	    while(f.lowpwr){
+	        osDelay(10000);
+	    }
 
 		/* Wait modem init */
 		f.try_cnt = 0;
@@ -148,12 +152,14 @@ void TrackerMainTask(void *argument)
 		{
 			xSemaphoreTake(opMutex, portMAX_DELAY);
 
-			if(f.gps_status > 1 && gp.valid){
+			if( (f.gps_status > 1 && gp.valid) || f.ext_ign ){
 				sprintf(url_buf,
-					"http://xtlt.ru:5159/?id=%s&operator=%s&csq=%s&gprmc=$GPRMC,%s&gpgga=$GPGGA,%s",
+					"http://xtlt.ru:5159/?id=%s&operator=%s&csq=%s&ign=%u&gps_valid=%u&gprmc=$GPRMC,%s&gpgga=$GPGGA,%s",
 					f.imei,
 					f.op_name,
 					f.csq,
+					f.ext_ign,
+					gp.valid,
 					gp.rmc,
 					gp.gga
 				);
@@ -177,18 +183,41 @@ void TrackerMainTask(void *argument)
                 send_sycle = 15000;
             }else if(f.gps_speed > 0 || f.ext_ign){
                 send_sycle = 30000;
+                stand_cntr = 0;
             }else{
                 send_sycle = 300000; // 5 min
-                stand_cntr++;
+                if(++stand_cntr > 5){
+                    stand_cntr = 0;
+                    goto sleep;
+                }
             }
 
 			xSemaphoreGive(opMutex);
 			osDelay(send_sycle);
 		}
 
+sleep:
+        osDelay(300);
+        f.try_cnt = 0;
+        while(!gps_powerdn(&msg)){
+            if(retry(5)){
+                xSemaphoreGive(opMutex);
+                goto restart;
+            }
+        }
+        f.try_cnt = 0;
+        f.gps_runing = 0;
+        f.gps_status = 0;
+        gp.valid = 0;
+        f.lowpwr = 1;
+        xSemaphoreGive(opMutex);
+        continue;
+
 restart:
 		power_off();
+		f.lowpwr = 0;
 		osDelay(30000);
+		power_on();
 	}
 }
 
@@ -239,7 +268,9 @@ void TrackerStatusTask() // Handle unsolicited reports
 			}else if(strcmp(un_msg.data, "RDY") == 0){
 				f.pwr_on = 1;
 			}
-
+			else if(strcmp(un_msg.data, "RING") == 0){
+                f.lowpwr = 0;
+            }
 		}
 	}
 }
@@ -258,15 +289,16 @@ void PeriodicCheckTask() // Check modem health and update GPS data
 			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
 			osDelay(200);
 			f.gps_status = gps_get_status(&msg);
-		}
-		if(f.gps_status > 1){
+
 			gp.valid = (gps_get_rmc(&msg, gp.rmc) && gps_get_gga(&msg, gp.gga));
-			if(gp.valid){
-				f.gps_speed = gps_speed(gp.rmc);
-				if(f.gps_speed){
-					stand_cntr = 0;
-				}
-			}
+            if(!f.gps_status){
+                gp.valid = 0;
+            }else if(f.gps_status > 1 && gp.valid){
+                f.gps_speed = gps_speed(gp.rmc);
+                if(f.gps_speed){
+                    stand_cntr = 0;
+                }
+            }
 		}
 
 		if(f.gsm_registered){
@@ -274,10 +306,10 @@ void PeriodicCheckTask() // Check modem health and update GPS data
 			osDelay(200);
 			gsm_get_csq(&msg, f.csq);
 
-			osDelay(200);
+			osDelay(300);
 			gsm_get_opname(&msg, f.op_name);
 
-			osDelay(200);
+			osDelay(300);
 			f.gprs_available = gprs_is_attached(&msg);
 
 			if(f.gprs_available){
@@ -289,12 +321,24 @@ void PeriodicCheckTask() // Check modem health and update GPS data
 				}
 			}
 		}
+		f.ext_ign = HAL_GPIO_ReadPin(IGNITION_GPIO_Port, IGNITION_Pin);
+		if(f.ext_ign){
+            f.lowpwr = 0;
+        }
 		xSemaphoreGive(opMutex);
 
-		if(stand_cntr < 6){
-			HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
-		}
+        HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
 	}
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+    if(GPIO_Pin == IGNITION_Pin) {
+        f.ext_ign = HAL_GPIO_ReadPin(IGNITION_GPIO_Port, IGNITION_Pin);
+        if(f.ext_ign){
+            f.lowpwr = 0;
+        }
+    }
 }
 
 uint8_t IS_OK(MsgType* msg)
@@ -316,6 +360,14 @@ uint8_t gps_powerup(MsgType* msg)
 		return IS_OK(msg);
 	}
 	return 0;
+}
+
+uint8_t gps_powerdn(MsgType* msg)
+{
+    if(AT("+CGPSPWR=0", msg, 1, 500)){
+        return IS_OK(msg);
+    }
+    return 0;
 }
 
 uint8_t gps_reset(MsgType* msg)
@@ -450,12 +502,15 @@ uint8_t gsm_get_opname(MsgType* msg, char *name)
 		return 0;
 	}
 
-	if(strstr(msg->data, "+COPS: 0,0,") == NULL || msg->len < 12){
+	char *ptr = strstr(msg->data, "0,0,");
+
+	if(ptr == NULL || msg->len < 12){
 		return 0;
 	}
 
-	msg->data[12+29] = 0;
-	strcpy(name,&msg->data[12]);
+	ptr += 5;
+	ptr[29] = 0;
+	strcpy(name,ptr);
 	char* c = strstr(name, "\"");
 	if(c != NULL){
 		*c = 0; // trim quotes
